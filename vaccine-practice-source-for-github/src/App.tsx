@@ -278,15 +278,30 @@ function App() {
 
   if (mode === 'setup') {
     return (
-      <main className="app-shell">
+      <main className="app-shell home-shell">
         <section className="intro">
-          <div>
-            <p className="eyebrow">预防接种题库</p>
-            <h1>香香加油刷题</h1>
-            <p className="intro-copy">
-              每次自动生成 150 题，按题库总量比例抽取，顺序固定为单选、多选、判断，做完立即查看成绩和错题。
-            </p>
+          <div className="intro-copyblock">
+            <p className="eyebrow">今日练习</p>
+            <h1>老婆的小题库</h1>
+            <p className="intro-copy">每天一套，稳稳进步。</p>
           </div>
+
+          <div className="session-card" aria-label="本次练习安排">
+            <div>
+              <span className="session-label">本次小目标</span>
+              <strong>150</strong>
+              <small>道题</small>
+            </div>
+            <div className="session-plan">
+              {TYPE_ORDER.map((type) => (
+                <span key={type}>
+                  <b>{TYPE_LABEL[type]}</b>
+                  {SESSION_PLAN[type]} 道
+                </span>
+              ))}
+            </div>
+          </div>
+
           <button className="primary-action" type="button" onClick={startPractice}>
             开始练习
           </button>
@@ -301,10 +316,9 @@ function App() {
 
         <section className="paper-plan">
           <div>
-            <h2>本套抽题规则</h2>
+            <h2>抽题顺序</h2>
             <p>
-              单选 {SESSION_PLAN.single} 道，多选 {SESSION_PLAN.multiple} 道，判断 {SESSION_PLAN.judge} 道，共{' '}
-              {SESSION_SIZE} 道。
+              先单选 {SESSION_PLAN.single} 道，再多选 {SESSION_PLAN.multiple} 道，最后判断 {SESSION_PLAN.judge} 道。
             </p>
           </div>
           <div className="mistake-strip">
