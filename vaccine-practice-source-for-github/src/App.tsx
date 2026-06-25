@@ -4,6 +4,7 @@ import './App.css'
 
 type QuestionType = 'single' | 'multiple' | 'judge'
 type Mode = 'setup' | 'practice' | 'result'
+type SessionKind = 'normal' | 'mistakes' | 'review'
 
 type Option = {
   key: string
@@ -29,21 +30,25 @@ type SessionQuestion = Question & {
   sessionNo: number
 }
 
+type MistakeRecord = {
+  id: number
+  wrongCount: number
+  lastWrongAt: string
+}
+
 const questionBank = bank as BankData
 
+const TYPE_ORDER: QuestionType[] = ['single', 'multiple', 'judge']
 const TYPE_LABEL: Record<QuestionType, string> = {
   single: '单选',
   multiple: '多选',
   judge: '判断',
 }
 
-const PLAN: Record<QuestionType, number> = {
-  single: 70,
-  multiple: 40,
-  judge: 40,
-}
-
+const SESSION_SIZE = 150
 const STORAGE_KEY = 'vaccine-practice-mistakes'
+
+const questionById = new Map(questionBank.questions.map((question) => [question.id, question]))
 
 function shuffle<T>(items: T[]): T[] {
   const next = [...items]
@@ -54,16 +59,72 @@ function shuffle<T>(items: T[]): T[] {
   return next
 }
 
-function createSession(): SessionQuestion[] {
-  const selected = (Object.keys(PLAN) as QuestionType[]).flatMap((type) => {
-    const pool = questionBank.questions.filter((question) => question.type === type)
-    return shuffle(pool).slice(0, PLAN[type])
+function allocateByRatio(counts: Record<QuestionType, number>, targetSize: number): Record<QuestionType, number> {
+  const total = TYPE_ORDER.reduce((sum, type) => sum + counts[type], 0)
+  const target = Math.min(targetSize, total)
+  const allocation = Object.fromEntries(TYPE_ORDER.map((type) => [type, 0])) as Record<QuestionType, number>
+
+  if (!total || !target) {
+    return allocation
+  }
+
+  const weighted = TYPE_ORDER.map((type) => {
+    const exact = (counts[type] / total) * target
+    const base = Math.min(Math.floor(exact), counts[type])
+    allocation[type] = base
+    return { type, remainder: exact - base }
   })
 
-  return shuffle(selected).map((question, index) => ({
+  let remaining = target - TYPE_ORDER.reduce((sum, type) => sum + allocation[type], 0)
+  while (remaining > 0) {
+    const next = weighted
+      .filter((item) => allocation[item.type] < counts[item.type])
+      .sort((left, right) => right.remainder - left.remainder || counts[right.type] - counts[left.type])[0]
+
+    if (!next) {
+      break
+    }
+
+    allocation[next.type] += 1
+    next.remainder = 0
+    remaining -= 1
+  }
+
+  return allocation
+}
+
+const SESSION_PLAN = allocateByRatio(questionBank.counts, SESSION_SIZE)
+
+function createSessionFromQuestions(questions: Question[], targetSize: number): SessionQuestion[] {
+  const counts = TYPE_ORDER.reduce(
+    (acc, type) => ({
+      ...acc,
+      [type]: questions.filter((question) => question.type === type).length,
+    }),
+    {} as Record<QuestionType, number>,
+  )
+  const plan = allocateByRatio(counts, targetSize)
+  const selected = TYPE_ORDER.flatMap((type) => {
+    const pool = questions.filter((question) => question.type === type)
+    return shuffle(pool).slice(0, plan[type])
+  })
+
+  return selected.map((question, index) => ({
     ...question,
     sessionNo: index + 1,
   }))
+}
+
+function createNormalSession(): SessionQuestion[] {
+  return createSessionFromQuestions(questionBank.questions, SESSION_SIZE)
+}
+
+function createMistakeSession(mistakes: Record<number, MistakeRecord>): SessionQuestion[] {
+  const mistakeQuestions = Object.keys(mistakes)
+    .map((id) => questionById.get(Number(id)))
+    .filter((question): question is Question => Boolean(question))
+
+  return createSessionFromQuestions(mistakeQuestions, SESSION_SIZE)
 }
 
 function normalizeAnswer(answer: string[] | undefined): string {
@@ -74,28 +135,48 @@ function isCorrect(question: Question, answer: string[] | undefined): boolean {
   return normalizeAnswer(answer) === normalizeAnswer(question.answer.split(''))
 }
 
-function loadMistakeIds(): number[] {
+function loadMistakes(): Record<number, MistakeRecord> {
   try {
     const value = localStorage.getItem(STORAGE_KEY)
-    return value ? JSON.parse(value) : []
+    if (!value) {
+      return {}
+    }
+
+    const parsed = JSON.parse(value) as number[] | Record<number, MistakeRecord>
+    if (Array.isArray(parsed)) {
+      return Object.fromEntries(
+        parsed.map((id) => [
+          id,
+          {
+            id,
+            wrongCount: 1,
+            lastWrongAt: new Date().toISOString(),
+          },
+        ]),
+      )
+    }
+
+    return parsed
   } catch {
-    return []
+    return {}
   }
 }
 
-function saveMistakeIds(ids: number[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify([...new Set(ids)]))
+function saveMistakes(records: Record<number, MistakeRecord>) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(records))
 }
 
 function App() {
   const [mode, setMode] = useState<Mode>('setup')
+  const [sessionKind, setSessionKind] = useState<SessionKind>('normal')
   const [session, setSession] = useState<SessionQuestion[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [answers, setAnswers] = useState<Record<number, string[]>>({})
   const [showReviewOnly, setShowReviewOnly] = useState(false)
-  const [mistakeIds, setMistakeIds] = useState<number[]>(loadMistakeIds)
+  const [mistakes, setMistakes] = useState<Record<number, MistakeRecord>>(loadMistakes)
 
   const currentQuestion = session[currentIndex]
+  const mistakeCount = Object.keys(mistakes).length
   const answeredCount = useMemo(
     () => session.filter((question) => answers[question.id]?.length).length,
     [answers, session],
@@ -104,7 +185,7 @@ function App() {
   const result = useMemo(() => {
     const wrong = session.filter((question) => !isCorrect(question, answers[question.id]))
     const correct = session.length - wrong.length
-    const byType = (Object.keys(TYPE_LABEL) as QuestionType[]).map((type) => {
+    const byType = TYPE_ORDER.map((type) => {
       const typed = session.filter((question) => question.type === type)
       const typedCorrect = typed.filter((question) => isCorrect(question, answers[question.id])).length
       return {
@@ -124,13 +205,24 @@ function App() {
     return session.filter((question) => wrongIds.has(question.id))
   }, [result.wrong, session, showReviewOnly])
 
-  function startPractice() {
-    const nextSession = createSession()
+  function beginSession(nextSession: SessionQuestion[], kind: SessionKind) {
     setSession(nextSession)
+    setSessionKind(kind)
     setAnswers({})
     setCurrentIndex(0)
     setShowReviewOnly(false)
     setMode('practice')
+  }
+
+  function startPractice() {
+    beginSession(createNormalSession(), 'normal')
+  }
+
+  function startMistakePractice() {
+    const nextSession = createMistakeSession(mistakes)
+    if (nextSession.length) {
+      beginSession(nextSession, 'mistakes')
+    }
   }
 
   function toggleAnswer(question: Question, key: string) {
@@ -145,16 +237,33 @@ function App() {
   }
 
   function submitPaper() {
-    const wrongIds = session
-      .filter((question) => !isCorrect(question, answers[question.id]))
-      .map((question) => question.id)
-    const nextMistakes = [...mistakeIds, ...wrongIds]
-    setMistakeIds([...new Set(nextMistakes)])
-    saveMistakeIds(nextMistakes)
+    const now = new Date().toISOString()
+    const wrong = session.filter((question) => !isCorrect(question, answers[question.id]))
+    const correct = session.filter((question) => isCorrect(question, answers[question.id]))
+    const nextMistakes = { ...mistakes }
+
+    if (sessionKind === 'mistakes') {
+      correct.forEach((question) => {
+        delete nextMistakes[question.id]
+      })
+    }
+
+    wrong.forEach((question) => {
+      const previous = nextMistakes[question.id]
+      nextMistakes[question.id] = {
+        id: question.id,
+        wrongCount: (previous?.wrongCount ?? 0) + 1,
+        lastWrongAt: now,
+      }
+    })
+
+    setMistakes(nextMistakes)
+    saveMistakes(nextMistakes)
     setMode('result')
   }
 
   function goReview(wrongOnly: boolean) {
+    setSessionKind('review')
     setShowReviewOnly(wrongOnly)
     const firstId = wrongOnly ? result.wrong[0]?.id : session[0]?.id
     const index = Math.max(0, session.findIndex((question) => question.id === firstId))
@@ -163,8 +272,8 @@ function App() {
   }
 
   function clearMistakes() {
-    setMistakeIds([])
-    saveMistakeIds([])
+    setMistakes({})
+    saveMistakes({})
   }
 
   if (mode === 'setup') {
@@ -173,8 +282,10 @@ function App() {
         <section className="intro">
           <div>
             <p className="eyebrow">预防接种题库</p>
-            <h1>扫码就能刷题</h1>
-            <p className="intro-copy">每次自动生成 150 题，覆盖单选、多选、判断，做完立即看得分和错题。</p>
+            <h1>香香加油刷题</h1>
+            <p className="intro-copy">
+              每次自动生成 150 题，按题库总量比例抽取，顺序固定为单选、多选、判断，做完立即查看成绩和错题。
+            </p>
           </div>
           <button className="primary-action" type="button" onClick={startPractice}>
             开始练习
@@ -191,12 +302,18 @@ function App() {
         <section className="paper-plan">
           <div>
             <h2>本套抽题规则</h2>
-            <p>单选 {PLAN.single} 道，多选 {PLAN.multiple} 道，判断 {PLAN.judge} 道，共 150 道。</p>
+            <p>
+              单选 {SESSION_PLAN.single} 道，多选 {SESSION_PLAN.multiple} 道，判断 {SESSION_PLAN.judge} 道，共{' '}
+              {SESSION_SIZE} 道。
+            </p>
           </div>
           <div className="mistake-strip">
-            <span>本机错题</span>
-            <strong>{mistakeIds.length}</strong>
-            <button type="button" onClick={clearMistakes} disabled={!mistakeIds.length}>
+            <span>错题库</span>
+            <strong>{mistakeCount}</strong>
+            <button type="button" onClick={startMistakePractice} disabled={!mistakeCount}>
+              练错题
+            </button>
+            <button type="button" onClick={clearMistakes} disabled={!mistakeCount}>
               清空
             </button>
           </div>
@@ -210,7 +327,7 @@ function App() {
     return (
       <main className="app-shell">
         <section className="result-hero">
-          <p className="eyebrow">本次成绩</p>
+          <p className="eyebrow">{sessionKind === 'mistakes' ? '错题练习成绩' : '本次成绩'}</p>
           <div className="score">{score}</div>
           <p>
             答对 {result.correct} 题，答错 {result.wrong.length} 题，共 {session.length} 题。
@@ -235,8 +352,8 @@ function App() {
           <button type="button" onClick={() => goReview(true)} disabled={!result.wrong.length}>
             查看错题
           </button>
-          <button type="button" onClick={() => goReview(false)}>
-            回看全部
+          <button type="button" onClick={startMistakePractice} disabled={!mistakeCount}>
+            错题库
           </button>
         </div>
       </main>
@@ -248,12 +365,15 @@ function App() {
     0,
     visibleQuestions.findIndex((question) => question.id === currentQuestion?.id),
   )
+  const progress = session.length ? (answeredCount / session.length) * 100 : 0
 
   return (
     <main className="practice-shell">
       <header className="practice-header">
         <div>
-          <p className="eyebrow">{showReviewOnly ? '错题回看' : '练习中'}</p>
+          <p className="eyebrow">
+            {showReviewOnly ? '错题回看' : sessionKind === 'mistakes' ? '错题库练习' : '练习中'}
+          </p>
           <h1>
             {currentQuestion ? currentQuestion.sessionNo : 0}/{session.length}
           </h1>
@@ -264,7 +384,7 @@ function App() {
       </header>
 
       <div className="progress-track">
-        <div style={{ width: `${(answeredCount / session.length) * 100}%` }} />
+        <div style={{ width: `${progress}%` }} />
       </div>
 
       {currentQuestion && (
@@ -277,16 +397,15 @@ function App() {
           <div className="options">
             {currentQuestion.options.map((option) => {
               const selected = answers[currentQuestion.id]?.includes(option.key)
-              const reveal = showReviewOnly || mode === 'practice'
               const answered = Boolean(answers[currentQuestion.id]?.length)
               const correctOption = currentQuestion.answer.includes(option.key)
-              const wrongSelected = selected && answered && reveal && !correctOption
+              const wrongSelected = selected && answered && !correctOption
               return (
                 <button
                   className={[
                     'option',
                     selected ? 'selected' : '',
-                    reveal && answered && correctOption ? 'correct' : '',
+                    answered && correctOption ? 'correct' : '',
                     wrongSelected ? 'wrong' : '',
                   ].join(' ')}
                   key={option.key}
