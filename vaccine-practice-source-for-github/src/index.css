@@ -1,9 +1,19 @@
 :root {
-  color: #17201f;
-  background: #f2f7f6;
-  font-family:
-    Inter, "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui,
+  --font-body:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC",
     sans-serif;
+  --ink-strong: #1c1c1e;
+  --ink-soft: #636366;
+  --ink-muted: #8e8e93;
+  --accent-blue: #007aff;
+  --line-soft: rgb(60 60 67 / 0.14);
+  color: var(--ink-strong);
+  background:
+    radial-gradient(circle at top, rgb(255 255 255 / 0.96), transparent 38%),
+    linear-gradient(180deg, #f8f9fb 0%, #f2f2f7 100%);
+  font-family:
+    var(--font-body);
   font-size: 16px;
   line-height: 1.5;
   font-synthesis: none;
@@ -20,6 +30,9 @@ body {
   min-width: 320px;
   min-height: 100svh;
   margin: 0;
+  background:
+    radial-gradient(circle at top, rgb(255 255 255 / 0.96), transparent 38%),
+    linear-gradient(180deg, #f8f9fb 0%, #f2f2f7 100%);
 }
 
 #root {
