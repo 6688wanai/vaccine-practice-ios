@@ -1,0 +1,9 @@
+{
+	"appId": "com.local.vaccinepractice",
+	"appName": "预防接种刷题",
+	"webDir": "dist",
+	"ios": {
+		"contentInset": "automatic"
+	},
+	"packageClassList": []
+}
