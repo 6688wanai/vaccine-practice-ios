@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import bank from './data/questions.json'
 import './App.css'
 
 type QuestionType = 'single' | 'multiple' | 'judge'
 type Mode = 'setup' | 'practice' | 'result'
-type SessionKind = 'normal' | 'mistakes' | 'review'
+type SessionKind = 'practice' | 'sprint' | 'mistakes' | 'review'
 
 type Option = {
   key: string
@@ -47,6 +47,8 @@ const TYPE_LABEL: Record<QuestionType, string> = {
 
 const SESSION_SIZE = 150
 const STORAGE_KEY = 'vaccine-practice-mistakes'
+const PRACTICE_SET_KEY = 'vaccine-practice-set-index'
+const PRACTICE_SET_COUNT = Math.ceil(questionBank.total / SESSION_SIZE)
 
 const questionById = new Map(questionBank.questions.map((question) => [question.id, question]))
 
@@ -115,7 +117,19 @@ function createSessionFromQuestions(questions: Question[], targetSize: number): 
   }))
 }
 
-function createNormalSession(): SessionQuestion[] {
+function addSessionNumbers(questions: Question[]): SessionQuestion[] {
+  return questions.map((question, index) => ({
+    ...question,
+    sessionNo: index + 1,
+  }))
+}
+
+function createPracticeSession(setIndex: number): SessionQuestion[] {
+  const start = setIndex * SESSION_SIZE
+  return addSessionNumbers(questionBank.questions.slice(start, start + SESSION_SIZE))
+}
+
+function createSprintSession(): SessionQuestion[] {
   return createSessionFromQuestions(questionBank.questions, SESSION_SIZE)
 }
 
@@ -125,6 +139,23 @@ function createMistakeSession(mistakes: Record<number, MistakeRecord>): SessionQ
     .filter((question): question is Question => Boolean(question))
 
   return createSessionFromQuestions(mistakeQuestions, SESSION_SIZE)
+}
+
+function loadPracticeSetIndex(): number {
+  try {
+    const saved = Number(localStorage.getItem(PRACTICE_SET_KEY))
+    if (Number.isInteger(saved) && saved >= 0 && saved < PRACTICE_SET_COUNT) {
+      return saved
+    }
+  } catch {
+    return 0
+  }
+
+  return 0
+}
+
+function savePracticeSetIndex(index: number) {
+  localStorage.setItem(PRACTICE_SET_KEY, String(index))
 }
 
 function normalizeAnswer(answer: string[] | undefined): string {
@@ -168,15 +199,20 @@ function saveMistakes(records: Record<number, MistakeRecord>) {
 
 function App() {
   const [mode, setMode] = useState<Mode>('setup')
-  const [sessionKind, setSessionKind] = useState<SessionKind>('normal')
+  const [sessionKind, setSessionKind] = useState<SessionKind>('practice')
   const [session, setSession] = useState<SessionQuestion[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [answers, setAnswers] = useState<Record<number, string[]>>({})
+  const [checkedAnswers, setCheckedAnswers] = useState<Record<number, boolean>>({})
   const [showReviewOnly, setShowReviewOnly] = useState(false)
   const [mistakes, setMistakes] = useState<Record<number, MistakeRecord>>(loadMistakes)
+  const [practiceSetIndex, setPracticeSetIndex] = useState(loadPracticeSetIndex)
 
   const currentQuestion = session[currentIndex]
   const mistakeCount = Object.keys(mistakes).length
+  const practiceSetSize = Math.min(SESSION_SIZE, questionBank.total - practiceSetIndex * SESSION_SIZE)
+  const practiceStartNo = practiceSetIndex * SESSION_SIZE + 1
+  const practiceEndNo = Math.min(questionBank.total, practiceStartNo + practiceSetSize - 1)
   const answeredCount = useMemo(
     () => session.filter((question) => answers[question.id]?.length).length,
     [answers, session],
@@ -197,6 +233,12 @@ function App() {
     return { correct, wrong, byType }
   }, [answers, session])
 
+  useEffect(() => {
+    if (mode === 'practice') {
+      window.scrollTo({ top: 0, behavior: 'auto' })
+    }
+  }, [currentIndex, mode])
+
   const reviewQuestions = useMemo(() => {
     if (!showReviewOnly) {
       return session
@@ -209,13 +251,18 @@ function App() {
     setSession(nextSession)
     setSessionKind(kind)
     setAnswers({})
+    setCheckedAnswers({})
     setCurrentIndex(0)
     setShowReviewOnly(false)
     setMode('practice')
   }
 
   function startPractice() {
-    beginSession(createNormalSession(), 'normal')
+    beginSession(createPracticeSession(practiceSetIndex), 'practice')
+  }
+
+  function startSprintPractice() {
+    beginSession(createSprintSession(), 'sprint')
   }
 
   function startMistakePractice() {
@@ -226,6 +273,10 @@ function App() {
   }
 
   function toggleAnswer(question: Question, key: string) {
+    if (checkedAnswers[question.id]) {
+      return
+    }
+
     setAnswers((prev) => {
       const current = prev[question.id] ?? []
       if (question.type === 'multiple') {
@@ -234,6 +285,16 @@ function App() {
       }
       return { ...prev, [question.id]: [key] }
     })
+
+    if (question.type !== 'multiple') {
+      setCheckedAnswers((prev) => ({ ...prev, [question.id]: true }))
+    }
+  }
+
+  function confirmAnswer(question: Question) {
+    if (answers[question.id]?.length) {
+      setCheckedAnswers((prev) => ({ ...prev, [question.id]: true }))
+    }
   }
 
   function submitPaper() {
@@ -259,12 +320,20 @@ function App() {
 
     setMistakes(nextMistakes)
     saveMistakes(nextMistakes)
+
+    if (sessionKind === 'practice') {
+      const nextSetIndex = (practiceSetIndex + 1) % PRACTICE_SET_COUNT
+      setPracticeSetIndex(nextSetIndex)
+      savePracticeSetIndex(nextSetIndex)
+    }
+
     setMode('result')
   }
 
   function goReview(wrongOnly: boolean) {
     setSessionKind('review')
     setShowReviewOnly(wrongOnly)
+    setCheckedAnswers(Object.fromEntries(session.map((question) => [question.id, true])))
     const firstId = wrongOnly ? result.wrong[0]?.id : session[0]?.id
     const index = Math.max(0, session.findIndex((question) => question.id === firstId))
     setCurrentIndex(index)
@@ -282,29 +351,29 @@ function App() {
         <section className="intro">
           <div className="intro-copyblock">
             <p className="eyebrow">今日练习</p>
-            <h1>老婆的小题库</h1>
-            <p className="intro-copy">每天一套，稳稳进步。</p>
+            <h1>香香的小题库</h1>
+            <p className="intro-copy">选个模式，开始刷题。</p>
           </div>
 
-          <div className="session-card" aria-label="本次练习安排">
-            <div>
-              <span className="session-label">本次小目标</span>
-              <strong>150</strong>
-              <small>道题</small>
-            </div>
-            <div className="session-plan">
-              {TYPE_ORDER.map((type) => (
-                <span key={type}>
-                  <b>{TYPE_LABEL[type]}</b>
-                  {SESSION_PLAN[type]} 道
-                </span>
-              ))}
-            </div>
-          </div>
+          <div className="mode-grid" aria-label="刷题模式">
+            <button className="mode-card primary-mode" type="button" onClick={startPractice}>
+              <span>练习模式</span>
+              <strong>
+                第 {practiceSetIndex + 1}/{PRACTICE_SET_COUNT} 套
+              </strong>
+              <small>
+                原题 {practiceStartNo}-{practiceEndNo}，按题库顺序。
+              </small>
+            </button>
 
-          <button className="primary-action" type="button" onClick={startPractice}>
-            开始练习
-          </button>
+            <button className="mode-card" type="button" onClick={startSprintPractice}>
+              <span>冲刺模式</span>
+              <strong>随机 150 道</strong>
+              <small>
+                单选 {SESSION_PLAN.single} 道，多选 {SESSION_PLAN.multiple} 道，判断 {SESSION_PLAN.judge} 道。
+              </small>
+            </button>
+          </div>
         </section>
 
         <section className="stats-grid" aria-label="题库统计">
@@ -316,9 +385,9 @@ function App() {
 
         <section className="paper-plan">
           <div>
-            <h2>抽题顺序</h2>
+            <h2>当前安排</h2>
             <p>
-              先单选 {SESSION_PLAN.single} 道，再多选 {SESSION_PLAN.multiple} 道，最后判断 {SESSION_PLAN.judge} 道。
+              练习模式按题库原始顺序每 {SESSION_SIZE} 道一套，不打乱题型；冲刺模式按题库比例随机抽题。
             </p>
           </div>
           <div className="mistake-strip">
@@ -338,10 +407,14 @@ function App() {
 
   if (mode === 'result') {
     const score = session.length ? Math.round((result.correct / session.length) * 100) : 0
+    const resultTitle =
+      sessionKind === 'mistakes' ? '错题练习成绩' : sessionKind === 'sprint' ? '冲刺模式成绩' : '练习模式成绩'
+    const nextAction = sessionKind === 'sprint' ? startSprintPractice : startPractice
+    const nextActionText = sessionKind === 'sprint' ? '再冲刺一套' : '练下一套'
     return (
       <main className="app-shell">
         <section className="result-hero">
-          <p className="eyebrow">{sessionKind === 'mistakes' ? '错题练习成绩' : '本次成绩'}</p>
+          <p className="eyebrow">{resultTitle}</p>
           <div className="score">{score}</div>
           <p>
             答对 {result.correct} 题，答错 {result.wrong.length} 题，共 {session.length} 题。
@@ -360,8 +433,8 @@ function App() {
         </section>
 
         <div className="result-actions">
-          <button className="primary-action" type="button" onClick={startPractice}>
-            再来一套
+          <button className="primary-action" type="button" onClick={nextAction}>
+            {nextActionText}
           </button>
           <button type="button" onClick={() => goReview(true)} disabled={!result.wrong.length}>
             查看错题
@@ -380,14 +453,19 @@ function App() {
     visibleQuestions.findIndex((question) => question.id === currentQuestion?.id),
   )
   const progress = session.length ? (answeredCount / session.length) * 100 : 0
+  const practiceTitle = showReviewOnly
+    ? '错题回看'
+    : sessionKind === 'mistakes'
+      ? '错题库练习'
+      : sessionKind === 'sprint'
+        ? '冲刺模式'
+        : `练习模式 ${practiceSetIndex + 1}/${PRACTICE_SET_COUNT}`
 
   return (
     <main className="practice-shell">
       <header className="practice-header">
         <div>
-          <p className="eyebrow">
-            {showReviewOnly ? '错题回看' : sessionKind === 'mistakes' ? '错题库练习' : '练习中'}
-          </p>
+          <p className="eyebrow">{practiceTitle}</p>
           <h1>
             {currentQuestion ? currentQuestion.sessionNo : 0}/{session.length}
           </h1>
@@ -402,27 +480,27 @@ function App() {
       </div>
 
       {currentQuestion && (
-        <section className="question-panel">
+        <section className="question-panel" key={`${sessionKind}-${currentQuestion.id}-${currentQuestion.sessionNo}`}>
           <div className="question-meta">
             <span>{TYPE_LABEL[currentQuestion.type]}</span>
             <span>原题号 {currentQuestion.id}</span>
           </div>
           <h2>{currentQuestion.stem}</h2>
           <div className="options">
-            {currentQuestion.options.map((option) => {
+            {currentQuestion.options.map((option, optionIndex) => {
               const selected = answers[currentQuestion.id]?.includes(option.key)
-              const answered = Boolean(answers[currentQuestion.id]?.length)
+              const checked = Boolean(checkedAnswers[currentQuestion.id])
               const correctOption = currentQuestion.answer.includes(option.key)
-              const wrongSelected = selected && answered && !correctOption
+              const wrongSelected = selected && checked && !correctOption
               return (
                 <button
                   className={[
                     'option',
                     selected ? 'selected' : '',
-                    answered && correctOption ? 'correct' : '',
+                    checked && correctOption ? 'correct' : '',
                     wrongSelected ? 'wrong' : '',
                   ].join(' ')}
-                  key={option.key}
+                  key={`${currentQuestion.id}-${option.key}-${optionIndex}`}
                   type="button"
                   onClick={() => toggleAnswer(currentQuestion, option.key)}
                 >
@@ -433,7 +511,18 @@ function App() {
             })}
           </div>
 
-          {answers[currentQuestion.id]?.length ? (
+          {currentQuestion.type === 'multiple' && !checkedAnswers[currentQuestion.id] ? (
+            <button
+              className="check-answer"
+              type="button"
+              onClick={() => confirmAnswer(currentQuestion)}
+              disabled={!answers[currentQuestion.id]?.length}
+            >
+              确认答案
+            </button>
+          ) : null}
+
+          {checkedAnswers[currentQuestion.id] ? (
             <div className={isCorrect(currentQuestion, answers[currentQuestion.id]) ? 'answer-note ok' : 'answer-note bad'}>
               正确答案：{currentQuestion.answer}
             </div>
