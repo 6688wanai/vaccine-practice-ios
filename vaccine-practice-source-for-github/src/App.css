@@ -280,22 +280,33 @@ button:disabled {
 
 .set-picker {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: 10px;
 }
 
 .set-chip {
+  position: relative;
   display: grid;
-  gap: 3px;
+  gap: 2px;
   align-content: center;
-  min-height: 66px;
+  min-height: 74px;
   padding: 10px 12px;
   text-align: left;
   background: #f8fbff;
 }
 
+.set-chip.completed {
+  background: #f6fbf7;
+}
+
+.set-chip.current {
+  border-color: rgb(0 122 255 / 0.42);
+  background: #edf6ff;
+}
+
 .set-chip span,
-.set-chip small {
+.set-chip small,
+.set-chip em {
   display: block;
 }
 
@@ -307,6 +318,21 @@ button:disabled {
 .set-chip small {
   color: var(--ink-soft);
   font-size: 12px;
+}
+
+.set-chip em {
+  color: var(--accent-blue);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.set-chip.completed em {
+  color: #1f7a36;
+}
+
+.set-chip.current em {
+  color: var(--accent-blue);
 }
 
 .paper-plan {
