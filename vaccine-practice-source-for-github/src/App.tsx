@@ -48,6 +48,7 @@ const TYPE_LABEL: Record<QuestionType, string> = {
 const SESSION_SIZE = 150
 const STORAGE_KEY = 'vaccine-practice-mistakes'
 const PRACTICE_SET_KEY = 'vaccine-practice-set-index'
+const COMPLETED_PRACTICE_SETS_KEY = 'vaccine-completed-practice-sets'
 const PRACTICE_SET_COUNT = Math.ceil(questionBank.total / SESSION_SIZE)
 
 const questionById = new Map(questionBank.questions.map((question) => [question.id, question]))
@@ -129,6 +130,13 @@ function createPracticeSession(setIndex: number): SessionQuestion[] {
   return addSessionNumbers(questionBank.questions.slice(start, start + SESSION_SIZE))
 }
 
+function getPracticeSetRange(setIndex: number) {
+  const size = Math.min(SESSION_SIZE, questionBank.total - setIndex * SESSION_SIZE)
+  const startNo = setIndex * SESSION_SIZE + 1
+  const endNo = Math.min(questionBank.total, startNo + size - 1)
+  return { size, startNo, endNo }
+}
+
 function createSprintSession(): SessionQuestion[] {
   return createSessionFromQuestions(questionBank.questions, SESSION_SIZE)
 }
@@ -156,6 +164,30 @@ function loadPracticeSetIndex(): number {
 
 function savePracticeSetIndex(index: number) {
   localStorage.setItem(PRACTICE_SET_KEY, String(index))
+}
+
+function normalizePracticeSets(indices: number[]): number[] {
+  return [...new Set(indices)]
+    .filter((index) => Number.isInteger(index) && index >= 0 && index < PRACTICE_SET_COUNT)
+    .sort((left, right) => left - right)
+}
+
+function loadCompletedPracticeSets(fallbackNextSetIndex = 0): number[] {
+  try {
+    const value = localStorage.getItem(COMPLETED_PRACTICE_SETS_KEY)
+    if (!value) {
+      return normalizePracticeSets(Array.from({ length: fallbackNextSetIndex }, (_, index) => index))
+    }
+
+    const parsed = JSON.parse(value) as unknown
+    return Array.isArray(parsed) ? normalizePracticeSets(parsed.map(Number)) : []
+  } catch {
+    return []
+  }
+}
+
+function saveCompletedPracticeSets(indices: number[]) {
+  localStorage.setItem(COMPLETED_PRACTICE_SETS_KEY, JSON.stringify(normalizePracticeSets(indices)))
 }
 
 function normalizeAnswer(answer: string[] | undefined): string {
@@ -207,12 +239,12 @@ function App() {
   const [showReviewOnly, setShowReviewOnly] = useState(false)
   const [mistakes, setMistakes] = useState<Record<number, MistakeRecord>>(loadMistakes)
   const [practiceSetIndex, setPracticeSetIndex] = useState(loadPracticeSetIndex)
+  const [activePracticeSetIndex, setActivePracticeSetIndex] = useState(practiceSetIndex)
+  const [completedPracticeSets, setCompletedPracticeSets] = useState(() => loadCompletedPracticeSets(practiceSetIndex))
 
   const currentQuestion = session[currentIndex]
   const mistakeCount = Object.keys(mistakes).length
-  const practiceSetSize = Math.min(SESSION_SIZE, questionBank.total - practiceSetIndex * SESSION_SIZE)
-  const practiceStartNo = practiceSetIndex * SESSION_SIZE + 1
-  const practiceEndNo = Math.min(questionBank.total, practiceStartNo + practiceSetSize - 1)
+  const practiceSetRange = getPracticeSetRange(practiceSetIndex)
   const answeredCount = useMemo(
     () => session.filter((question) => answers[question.id]?.length).length,
     [answers, session],
@@ -257,8 +289,9 @@ function App() {
     setMode('practice')
   }
 
-  function startPractice() {
-    beginSession(createPracticeSession(practiceSetIndex), 'practice')
+  function startPractice(setIndex = practiceSetIndex) {
+    setActivePracticeSetIndex(setIndex)
+    beginSession(createPracticeSession(setIndex), 'practice')
   }
 
   function startSprintPractice() {
@@ -322,9 +355,15 @@ function App() {
     saveMistakes(nextMistakes)
 
     if (sessionKind === 'practice') {
-      const nextSetIndex = (practiceSetIndex + 1) % PRACTICE_SET_COUNT
-      setPracticeSetIndex(nextSetIndex)
-      savePracticeSetIndex(nextSetIndex)
+      const nextCompletedPracticeSets = normalizePracticeSets([...completedPracticeSets, activePracticeSetIndex])
+      setCompletedPracticeSets(nextCompletedPracticeSets)
+      saveCompletedPracticeSets(nextCompletedPracticeSets)
+
+      if (activePracticeSetIndex === practiceSetIndex) {
+        const nextSetIndex = (practiceSetIndex + 1) % PRACTICE_SET_COUNT
+        setPracticeSetIndex(nextSetIndex)
+        savePracticeSetIndex(nextSetIndex)
+      }
     }
 
     setMode('result')
@@ -356,13 +395,13 @@ function App() {
           </div>
 
           <div className="mode-grid" aria-label="刷题模式">
-            <button className="mode-card primary-mode" type="button" onClick={startPractice}>
+            <button className="mode-card primary-mode" type="button" onClick={() => startPractice()}>
               <span>练习模式</span>
               <strong>
                 第 {practiceSetIndex + 1}/{PRACTICE_SET_COUNT} 套
               </strong>
               <small>
-                原题 {practiceStartNo}-{practiceEndNo}，按题库顺序。
+                原题 {practiceSetRange.startNo}-{practiceSetRange.endNo}，按题库顺序。
               </small>
             </button>
 
@@ -381,6 +420,35 @@ function App() {
           <StatCard label="单选题" value={questionBank.counts.single} />
           <StatCard label="多选题" value={questionBank.counts.multiple} />
           <StatCard label="判断题" value={questionBank.counts.judge} />
+        </section>
+
+        <section className="completed-sets" aria-label="已完成套题">
+          <div className="section-heading">
+            <div>
+              <h2>已完成套题</h2>
+              <p>
+                已完成 {completedPracticeSets.length}/{PRACTICE_SET_COUNT} 套
+              </p>
+            </div>
+          </div>
+
+          {completedPracticeSets.length ? (
+            <div className="set-picker">
+              {completedPracticeSets.map((setIndex) => {
+                const range = getPracticeSetRange(setIndex)
+                return (
+                  <button className="set-chip" type="button" key={setIndex} onClick={() => startPractice(setIndex)}>
+                    <span>第 {setIndex + 1} 套</span>
+                    <small>
+                      {range.startNo}-{range.endNo}
+                    </small>
+                  </button>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="empty-note">暂无已完成套题</p>
+          )}
         </section>
 
         <section className="paper-plan">
@@ -409,7 +477,7 @@ function App() {
     const score = session.length ? Math.round((result.correct / session.length) * 100) : 0
     const resultTitle =
       sessionKind === 'mistakes' ? '错题练习成绩' : sessionKind === 'sprint' ? '冲刺模式成绩' : '练习模式成绩'
-    const nextAction = sessionKind === 'sprint' ? startSprintPractice : startPractice
+    const nextAction = sessionKind === 'sprint' ? startSprintPractice : () => startPractice()
     const nextActionText = sessionKind === 'sprint' ? '再冲刺一套' : '练下一套'
     return (
       <main className="app-shell">
@@ -459,7 +527,7 @@ function App() {
       ? '错题库练习'
       : sessionKind === 'sprint'
         ? '冲刺模式'
-        : `练习模式 ${practiceSetIndex + 1}/${PRACTICE_SET_COUNT}`
+        : `练习模式 ${activePracticeSetIndex + 1}/${PRACTICE_SET_COUNT}`
 
   return (
     <main className="practice-shell">
