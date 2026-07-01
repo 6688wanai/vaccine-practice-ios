@@ -245,6 +245,11 @@ function App() {
   const currentQuestion = session[currentIndex]
   const mistakeCount = Object.keys(mistakes).length
   const practiceSetRange = getPracticeSetRange(practiceSetIndex)
+  const allPracticeSetIndices = useMemo(
+    () => Array.from({ length: PRACTICE_SET_COUNT }, (_, index) => index),
+    [],
+  )
+  const completedPracticeSetIds = useMemo(() => new Set(completedPracticeSets), [completedPracticeSets])
   const answeredCount = useMemo(
     () => session.filter((question) => answers[question.id]?.length).length,
     [answers, session],
@@ -422,33 +427,39 @@ function App() {
           <StatCard label="判断题" value={questionBank.counts.judge} />
         </section>
 
-        <section className="completed-sets" aria-label="已完成套题">
+        <section className="completed-sets" aria-label="自选题库">
           <div className="section-heading">
             <div>
-              <h2>已完成套题</h2>
+              <h2>自选题库</h2>
               <p>
-                已完成 {completedPracticeSets.length}/{PRACTICE_SET_COUNT} 套
+                任选 1-{PRACTICE_SET_COUNT} 套，按题库顺序练习。
               </p>
             </div>
           </div>
 
-          {completedPracticeSets.length ? (
-            <div className="set-picker">
-              {completedPracticeSets.map((setIndex) => {
-                const range = getPracticeSetRange(setIndex)
-                return (
-                  <button className="set-chip" type="button" key={setIndex} onClick={() => startPractice(setIndex)}>
-                    <span>第 {setIndex + 1} 套</span>
-                    <small>
-                      {range.startNo}-{range.endNo}
-                    </small>
-                  </button>
-                )
-              })}
-            </div>
-          ) : (
-            <p className="empty-note">暂无已完成套题</p>
-          )}
+          <div className="set-picker">
+            {allPracticeSetIndices.map((setIndex) => {
+              const range = getPracticeSetRange(setIndex)
+              const completed = completedPracticeSetIds.has(setIndex)
+              const current = setIndex === practiceSetIndex
+              return (
+                <button
+                  className={['set-chip', completed ? 'completed' : '', current ? 'current' : ''].join(' ')}
+                  type="button"
+                  key={setIndex}
+                  onClick={() => startPractice(setIndex)}
+                >
+                  <span>第 {setIndex + 1} 套</span>
+                  <small>
+                    {range.startNo}-{range.endNo}
+                  </small>
+                  {completed || current ? (
+                    <em>{current ? '下一套' : '已完成'}</em>
+                  ) : null}
+                </button>
+              )
+            })}
+          </div>
         </section>
 
         <section className="paper-plan">
